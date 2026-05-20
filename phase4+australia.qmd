@@ -4,11 +4,7 @@ format: html
 editor: visual
 ---
 
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
-The `echo: false` option disables the printing of code (only output is displayed).
 
-I need to figure out how to to harmony integration instead of rpca while still doing the same protocol as before (removing low quality cells).
 ```{r}
 # load libraries 
 library(Seurat)
@@ -24,10 +20,11 @@ library(rstatix)
 library(pheatmap)
 library(Matrix)
 library(reshape2)
+library(biomaRt)
 ```
 
 ```{r}
-# load filtered phase 4 & australia data 
+# load filtered phase 4  
 micro_AD_CO <- readRDS("micro_AD_CO.rds")
 micro_AD_CO # already a seurat object 
 dim(micro_AD_CO) # gene x cell 
@@ -68,7 +65,7 @@ table(micro_AD_CO$orig.ident[micro_AD_CO$flag_APOE4 == "APOE4+"])
 length(table(micro_AD_CO$orig.ident[micro_AD_CO$flag_APOE4 == "APOE4+"]))
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-
+# load preprocessed australia 
 microglia.aus <- qread("microglia_reprocessed.qs") # AUS microglia dataset (originally 19626 cells)
 microglia.aus # already a seurat object 
 dim(microglia.aus) # gene x cell 
@@ -123,7 +120,6 @@ data.frame( # table
   Mutation = c("PSEN1", "APP"),
   Donor_Count = c(length(psen1_donors), length(app_donors))
 )
-
 ```
 
 ```{r}
@@ -180,17 +176,15 @@ map_dfr(aus.split, function(x) {
 dims <- t(sapply(aus.split, function(x) dim(x)))
 sort(dims[,2])  
 
-aus.split$`MGI3522_CKAE-SU804-1` <- NULL # low cells count
+aus.split$`MGI3522_CKAE-SU804-1` <- NULL # low cell count
 
-VlnPlot(microglia.aus, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) # checking amount of umis per cell (reason: sct can work better if varying range of umis per cell)
+VlnPlot(microglia.aus, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) # checking amount of umis per cell 
 VlnPlot(micro_AD_CO, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 
-micro_AD_CO$percent.mt <- pmin(micro_AD_CO$percent.mt, 10)
+micro_AD_CO$percent.mt <- pmin(micro_AD_CO$percent.mt, 10) # setting max to 10%
 VlnPlot(micro_AD_CO, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
 ```
 
-Reason for the sporadic 'Idents' numbers: The object was subset from a larger dataset - the microglia was subseted.
-Merging in not required but recommended b/c it requires the same features across objects. Harmony works on PCA embeddings, PCA is built from shared genes anyway so using common genes avoids problems.
 ```{r}
 # match genes - keeps only genes present in both 
 common_genes <- intersect(
@@ -225,7 +219,6 @@ combined$batch <- ifelse(
 table(combined$batch) # sanity check 
 ```
 
-Note: you can use SCTransform and Harmony together.
 ```{r}
 # split the single object into a list of objects by sample/identity
 combined <- SplitObject(combined, split.by = "orig.ident")
@@ -233,16 +226,11 @@ combined <- SplitObject(combined, split.by = "orig.ident")
 # filter out objects whose RNA counts matrix has 0 genes
 combined <- combined[sapply(combined, function(x)
     dim(GetAssayData(x, assay = "RNA", layer = "counts"))[1] > 0)]
-
-# remove these three samples that have very few cells
-combined$`46_16258_F` <- NULL
-combined$`5_1442_F` <- NULL
-combined$`MGI3522_CKAE-SU804-1` <- NULL # from aus
 ```
 
 # Renormalize data
 ```{r}
-# run SCTransform on the list (use lapply instead of sapply for objects)
+# run SCTransform on the list 
 combined <- lapply(combined, function(x) {
     print(unique(x$orig.ident))
     SCTransform(
@@ -258,7 +246,6 @@ class(combined) # check class
 
 # Get the list of protein coding genes 
 ```{r}
-library(biomaRt)
 ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
 pc <- getBM(attributes = c("hgnc_symbol", "gene_biotype"),
             mart = ensembl) %>% 
@@ -305,14 +292,14 @@ for (i in seq_along(samples)) {
   }
 }
 
-# load library and plot
+# plot
 pheatmap(shared_matrix,
          cluster_rows = FALSE,
          cluster_cols = FALSE,
          main = "Proportion of shared proteins")
 ```
 
-# Drop samples 13, 21, 27, 54 and 'MGI3522_CKAE-SU639-1'
+# Drop samples 13, 21, 27, 54 and 'MGI3522_CKAE-SU639-1' b/c they are outliers
 ```{r}
 combined <- combined[-c(grep("^13_|^21_|^27_|^54_", names(combined)))]
 combined <- combined[!names(combined) %in% "MGI3522_CKAE-SU639-1"]
@@ -327,16 +314,12 @@ for (x in combined) {
 }
 print(length(all_var_features))
 
-# exclude genes that are not expressed in all datasets
-# the limiting step to get a higher number of genes is this filtering
-# in this case, 2300 genes are expressed across all samples
 for (x in combined) {
   print(length(rownames(x$SCT)))
     all_var_features <- all_var_features[all_var_features %in% rownames(x$SCT)]
 }
 print(length(all_var_features))
 
-# Plot heatmap again
 list_genes <- map(combined, function(x) { x$SCT@var.features[x$SCT@var.features %in% pc] })
 
 # initialize matrix
@@ -353,6 +336,7 @@ for (i in seq_along(samples)) {
   }
 }
 
+# plot heatmap again (should be cleaner) 
 pheatmap(shared_matrix,
          cluster_rows = FALSE,
          cluster_cols = FALSE,
@@ -365,13 +349,13 @@ combined_merged <- merge(combined[[1]], y = combined[-1])
 ```
 
 ```{r}
-# define your hvgs
+# define hvgs (the protein coding genes)
 all_var_features
 VariableFeatures(combined_merged) <- all_var_features
 ```
 
 ```{r}
-# run pca (this is now your “integration input”)
+# run pca (this is the “integration input”)
 combined_merged <- RunPCA(
   combined_merged,
   features = all_var_features,
@@ -433,7 +417,6 @@ table(combined_merged$orig.ident, combined_merged$seurat_clusters) # each cluste
 ```
 
 # Visualizations
-PCA and harmony showed the same non-mixing of data on plot. Why?
 ```{r}
 Reductions(combined_merged) # check reductions 
 colnames(combined_merged@meta.data) # check metadata
@@ -507,10 +490,9 @@ table(combined_merged$Status.3)
 DimPlot(combined_merged, reduction = "umap", group.by = "Status.3")
 # DimPlot(combined_merged, reduction = "umap_cnmf", group.by = "Status.3")
 table(combined_merged$seurat_clusters, combined_merged$Status_mixed) # sub status proportions across all clusters 
-
 ```
 
-# What your mentor specifically wants (cohort proportions per cluster)
+# Cohort proportions per cluster
 ```{r}
 # quantify mixing - showing the number of cells from that donor in that cluster
 table(combined_merged$orig.ident, combined_merged$seurat_clusters) 
