@@ -1,0 +1,128 @@
+# In python 
+# Import needed packages 
+import scanpy as sc
+import pandas as pd
+from cnmf import cNMF
+import cnmf.preprocess as p
+
+# load matrix
+adata = sc.read_mtx("./microglia_cnmf_input/matrix_1211.mtx").T
+genes = pd.read_csv("./microglia_cnmf_input/genes_1211.tsv", header=None)[0]
+barcodes = pd.read_csv("./microglia_cnmf_input/barcodes_1211.tsv", header=None)[0]
+meta = pd.read_csv("microglia_cnmf_input/metadata_1211.tsv", sep="\t", index_col=0)
+adata.obs_names = barcodes.astype(str)
+adata.var_names = genes.astype(str)
+adata.obs = meta.loc[adata.obs_names]
+adata.obs = adata.obs.astype(str)
+pc_genes = pd.read_csv("microglia_cnmf_input/R_1211_genes.txt", header=None)[0]
+print(len(pc_genes)) # check
+print(pc_genes[:20]) # check 
+
+print(all(adata.obs_names == meta.loc[adata.obs_names].index)) # should be true 
+
+# keep 1211 (the protein coding genes)
+adata = adata[:, adata.var_names.isin(pc_genes)].copy()
+adata.var["highly_variable"] = True
+missing = set(pc_genes) - set(adata.var_names) # check 
+print(len(missing)) # check 
+print(adata.shape) # should be (cells, 1211)
+print(len(adata.var_names)) # should be 1211
+
+# filter the matrix to the 1211 genes
+adata = adata[:, adata.var_names.isin(pc_genes)].copy()
+print(adata.shape)              # should be (cells, 1211)
+print(len(adata.var_names))     # should be 1211
+
+pp = p.Preprocess()
+adata_c, adata_tp10k, hvgs = pp.preprocess_for_cnmf(
+    adata,
+    harmony_vars=["orig.ident"], # correcting by donor
+    n_top_rna_genes=None,   
+    quantile_thresh=0.9999,
+    makeplots=True,
+    save_output_base="./microglia_1211_batchcorrect"
+)
+print(len(hvgs))        # should be 1211
+print(adata_c.shape)    # genes = 1211
+
+# creating cnmf object
+cnmf_obj = cNMF(
+    output_dir="./microglia_batchcorrect",
+    name="microglia_1211"
+)
+
+cnmf_obj.prepare(
+    counts_fn="./microglia_1211_batchcorrect.Corrected.HVG.Varnorm.h5ad",
+    tpm_fn="./microglia_1211_batchcorrect.TP10K.h5ad",
+    genes_file="./microglia_1211_batchcorrect.Corrected.HVGs.txt",
+    components=range(2,15),
+    n_iter=20,
+    seed=14
+)
+
+#`````````` check block ```````````#
+# confirm input to preprocess is correct
+adata = adata[:, adata.var_names.isin(pc_genes)].copy()
+print(adata.shape)  # MUST be (cells, 1211) 
+
+print("Before preprocess:", adata.shape)
+print("Genes:", len(adata.var_names)) # should be (cells, 1211)
+
+# check what preprocess actually outputs
+adata_c, adata_tp10k, hvgs = pp.preprocess_for_cnmf(adata,
+    harmony_vars=["orig.ident"],
+    n_top_rna_genes=None,
+    quantile_thresh=0.9999)
+print("HVGs:", len(hvgs))
+print("adata_c shape:", adata_c.shape)
+
+genes_file = "./microglia_1211_batchcorrect.Corrected.HVGs.txt"
+genes = pd.read_csv(genes_file, header=None)[0]
+print("Saved genes:", len(genes))      # 1211
+print(len(genes))  # should be 1211
+print(genes[:10])
+print(len(adata.var_names))  # should be ~1211
+
+print(len(set(adata.var_names) - set(pc_genes)))  # should be 0
+print(len(set(pc_genes) - set(adata.var_names)))  # should be 0
+#`````````` check block ```````````#
+
+# run factorization
+cnmf_obj.factorize(worker_i=0, total_workers=1)
+# combine runs 
+cnmf_obj.combine()
+cnmf_obj.k_selection_plot()
+cnmf_obj.consensus(k=13, density_threshold=0.1) # choose your K after looking at stability plot 
+
+# visulaizations - run clustering (Leiden)
+# 1. compute neighbors 
+sc.pp.neighbors(adata_c, use_rep="X_pca_harmony")
+# 2. run Leiden clustering 
+sc.tl.leiden(adata_c, resolution=2.0)
+# 3. compute UMAP embedding 
+sc.tl.umap(adata_c)
+# 4. plot UMAP colored by Leiden clusters
+sc.pl.umap(adata_c, color="leiden", save="_1211clusters.2.png")
+
+# bringing over UMAP coordinates from Python
+# export UMAP coordinates in Python, canpy stores UMAP in adata.obsm['X_umap'].
+umap_coords = pd.DataFrame(
+    adata_c.obsm['X_umap'],
+    index=adata_c.obs_names,
+    columns=['UMAP_1', 'UMAP_2']
+)
+umap_coords.to_csv("microglia_umap_1211_coords.csv")
+
+# saving and exporting the harmony umap after correction to figures
+# building a UMAP from the Harmony-corrected PCA
+# print available PCA representations
+print(adata_c.obsm.keys()) 
+
+# the UMAP computed from X_pca_harmony (umap_harmony.png)
+# it directly reflects the Harmony-corrected PCs that cNMF is using, so the GEPs will align correctly with batch-corrected structure
+
+# use Harmony-corrected PCs
+sc.pp.neighbors(adata_c, use_rep="X_pca_harmony")
+# then compute UMAP
+sc.tl.umap(adata_c)
+sc.pl.umap(adata_c, color=["orig.ident"], save="_1211harmony1.png") 
