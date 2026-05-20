@@ -666,7 +666,6 @@ FeaturePlot(
   combine = FALSE
 )
 
-library(patchwork)
 plots <- FeaturePlot(
   combined_merged,
   features = colnames(usage_norm),
@@ -1393,28 +1392,6 @@ ggplot(df, aes(x = programs_per_cell)) +
 table(df.2$adj_programs) # no change 
 ```
 
-idk yet 
-```{r}
-library(ggpubr)
-ggplot(df.2, aes(x = status, y = usage, fill = status)) +
-  geom_boxplot(outlier.shape = NA) +
-  facet_wrap(~ program, scales = "free_y") +
-  stat_compare_means(method = "wilcox.test") +  # ⚠️ unadjusted
-  theme_minimal()
-
-model_cov <- lm(
-  usage ~ status + APOE4_status + age + sex + batch,
-  data = df.2,
-  na.action = na.exclude
-)
-df.2$resid_usage <- residuals(model_cov)
-ggplot(df.2, aes(x = status, y = resid_usage, fill = status)) +
-  geom_boxplot() +
-  facet_wrap(~ program, scales = "free_y") +
-  stat_compare_means(method = "wilcox.test") +
-  theme_minimal()
-```
-
 # Visualizations of programs per cell - which combinations of programs co-occur
 ```{r}
 # step 1: define “program expressed”
@@ -1652,46 +1629,6 @@ DimPlot(
 DimPlot(
   combined_merged,
   reduction = "umap_cnmf",
-  label = TRUE
-)
-```
-
-# Fully consistent clustering - “Consistent” = recalculate clusters using the same Harmony data that made the UMAP
-```{r}
-harmony_pca <- read.csv("figures/microglia_harmony_pca_1211.csv", row.names = 1)
-
-# make sure order matches
-harmony_pca <- harmony_pca[colnames(combined_merged), ]
-
-# make sure it's a matrix
-harmony_pca <- as.matrix(harmony_pca)
-
-# fix column names (required)
-colnames(harmony_pca) <- paste0("HARMONY_", seq_len(ncol(harmony_pca)))
-
-# ensure rownames match cells
-harmony_pca <- harmony_pca[colnames(combined_merged), ]
-
-# create reduction
-combined_merged[["harmony"]] <- CreateDimReducObject(
-  embeddings = harmony_pca,
-  key = "HARMONY_",
-  assay = DefaultAssay(combined_merged)
-)
-
-head(colnames(harmony_pca))
-
-combined_merged.pca <- FindNeighbors(combined_merged, reduction = "harmony", dims = 1:30)
-combined_merged.pca <- FindClusters(combined_merged, resolution = 0.2)
-
-FindNeighbors(combined_merged.pca, reduction = "harmony", dims = 1:30)
-FindClusters(combined_merged.pca, resolution = 0.2)
-RunUMAP(combined_merged.pca, reduction = "harmony", dims = 1:30)
-
-DimPlot(
-  combined_merged.pca,
-  reduction = "umap",
-  group.by = "seurat_clusters",
   label = TRUE
 )
 ```
