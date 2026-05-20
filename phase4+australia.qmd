@@ -1,0 +1,1766 @@
+---
+title: "phase4+australia"
+format: html
+editor: visual
+---
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+The `echo: false` option disables the printing of code (only output is displayed).
+
+I need to figure out how to to harmony integration instead of rpca while still doing the same protocol as before (removing low quality cells).
+```{r}
+# load libraries 
+library(Seurat)
+library(SeuratData)
+library(SeuratWrappers)
+library(ggplot2)
+library(patchwork)
+library(harmony)
+library(qs)
+library(tidyverse)
+library(dplyr)
+library(rstatix)
+library(pheatmap)
+library(Matrix)
+library(reshape2)
+```
+
+```{r}
+# load filtered phase 4 & australia data 
+micro_AD_CO <- readRDS("micro_AD_CO.rds")
+micro_AD_CO # already a seurat object 
+dim(micro_AD_CO) # gene x cell 
+DefaultAssay(micro_AD_CO) <- "RNA"
+dim(micro_AD_CO) # gene x cell 
+table(micro_AD_CO$orig.ident) 
+length(table(micro_AD_CO$orig.ident)) # check length (71 samples/donors)
+table(micro_AD_CO$Status) # check how many cells are AD and CO
+unique(micro_AD_CO$Status) # check if there are only AD and CO
+prop.table(table(micro_AD_CO$Status)) * 100 # percentage
+table(micro_AD_CO$gender) # check how many cells are male and female 
+prop.table(table(micro_AD_CO$gender)) * 100 # percentage 
+table(micro_AD_CO$AOD) 
+table(micro_AD_CO$Status2) # breakdown of AD (ADAD/sAD)
+prop.table(table(micro_AD_CO$Status2)) * 100 # percentage 
+tapply(micro_AD_CO$orig.ident, micro_AD_CO$Status2, function(x) length(unique(x))) # number of donors per sub status
+
+sample_status <- tapply( # check number of donors per status (AD or CO)
+  micro_AD_CO$Status,
+  micro_AD_CO$orig.ident,
+  unique
+)
+table(sample_status)
+
+sample_info <- data.frame( # check number of disease status + sex per status 
+  Sample = micro_AD_CO$orig.ident,
+  Status = micro_AD_CO$Status,
+  Sex = micro_AD_CO$gender
+)
+sample_info_unique <- unique(sample_info) # keep one row per donor
+prop.table(table(sample_status)) * 100 # percentage 
+table(sample_info_unique$Status, sample_info_unique$Sex) 
+prop.table(table(sample_info_unique$Status, sample_info_unique$Sex), margin = 1) * 100 
+
+# checking apoe donors 
+unique(micro_AD_CO$orig.ident[micro_AD_CO$flag_APOE4 == "APOE4+"])
+table(micro_AD_CO$orig.ident[micro_AD_CO$flag_APOE4 == "APOE4+"])
+length(table(micro_AD_CO$orig.ident[micro_AD_CO$flag_APOE4 == "APOE4+"]))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+
+microglia.aus <- qread("microglia_reprocessed.qs") # AUS microglia dataset (originally 19626 cells)
+microglia.aus # already a seurat object 
+dim(microglia.aus) # gene x cell 
+DefaultAssay(microglia.aus) <- "RNA"
+dim(microglia.aus) # gene x cell 
+table(microglia.aus$orig.ident) 
+length(table(microglia.aus$orig.ident)) # check length (71 samples/donors)
+table(microglia.aus$Status) # check how many cells are AD and CO
+unique(microglia.aus$Status) # check if there are only AD and CO
+prop.table(table(microglia.aus$Status)) * 100 # percentage
+table(microglia.aus$Sex) # check how many cells are male and female 
+prop.table(table(microglia.aus$Sex)) * 100 # percentage 
+table(microglia.aus$Age_of_death) 
+table(microglia.aus$Case_sub_status) # breakdown of AD (ADAD/sAD)
+prop.table(table(microglia.aus$Case_sub_status)) * 100 # percentage 
+tapply(microglia.aus$orig.ident, microglia.aus$Case_sub_status, function(x) length(unique(x))) # number of donors per sub status
+
+sample_status <- tapply( # check number of donors per status (AD or CO)
+  microglia.aus$Status,
+  microglia.aus$orig.ident,
+  unique
+)
+table(sample_status)
+
+sample_info <- data.frame( # check number of disease status + sex per status 
+  Sample = microglia.aus$orig.ident,
+  Status = microglia.aus$Status,
+  Sex = microglia.aus$Sex
+)
+sample_info_unique <- unique(sample_info) # keep one row per donor
+prop.table(table(sample_status)) * 100 # percentage 
+table(sample_info_unique$Status, sample_info_unique$Sex) 
+prop.table(table(sample_info_unique$Status, sample_info_unique$Sex), margin = 1) * 100 # percentage
+
+# checking apoe donors 
+unique(microglia.aus$orig.ident[microglia.aus$APOE4_y_n == "Yes"])
+table(microglia.aus$orig.ident[microglia.aus$APOE4_y_n == "Yes"])
+length(table(microglia.aus$otablerig.ident[microglia.aus$APOE4_y_n == "Yes"]))
+
+# cohort characterization table with mutation details (PSN1, APP) for ADAD samples
+adad <- microglia.aus@meta.data[microglia.aus$Case_sub_status == "ADAD", ]
+
+psen1_donors <- unique(adad$ID[adad$PSEN1_mutation_y_n == "Yes"])
+psen1_donors
+length(psen1_donors)
+
+app_donors <- unique(adad$ID[adad$APP_mutation__y_n == "Yes"])
+app_donors
+length(app_donors)
+
+data.frame( # table
+  Mutation = c("PSEN1", "APP"),
+  Donor_Count = c(length(psen1_donors), length(app_donors))
+)
+
+```
+
+```{r}
+DefaultAssay(microglia.aus) <- "RNA"
+DefaultAssay(micro_AD_CO) <- "RNA"
+# keep only to RNA assay and only the raw counts layer of the dataset 
+microglia.aus <- DietSeurat(
+  microglia.aus,
+  assays = "RNA",
+  counts = TRUE,
+  data = FALSE,
+  scale.data = FALSE
+)
+micro_AD_CO <- DietSeurat(
+  micro_AD_CO,
+  assays = "RNA",
+  counts = TRUE,
+  data = FALSE,
+  scale.data = FALSE
+)
+```
+
+Analysis of basis data. (cells, umis) The 'Idents' = 'seurat_clusters'
+```{r}
+splitted.data <- SplitObject(micro_AD_CO, split.by = "orig.ident") # splitting data by donors 
+# remove these two samples that have very few cells
+splitted.data$`46_16258_F` <- NULL
+splitted.data$`5_1442_F` <- NULL
+
+# number of features and cells in each sample - phase 4
+map_dfr(splitted.data, function(x) {
+  data.frame(
+    sample = unique(x$orig.ident),
+    ncells = ncol(x),
+    ngenes = nrow(x),
+    group = unique(x$Status)
+  )
+}) -> info
+
+dims <- t(sapply(splitted.data, function(x) dim(x)))
+sort(dims[,2])  
+
+aus.split <- SplitObject(microglia.aus, split.by = "orig.ident") # splitting data by donors 
+# number of features and cells in each sample - australia 
+map_dfr(aus.split, function(x) {
+  data.frame(
+    sample = unique(x$orig.ident),
+    ncells = ncol(x),
+    ngenes = nrow(x),
+    group = unique(x$Status)
+  )
+}) -> info
+
+dims <- t(sapply(aus.split, function(x) dim(x)))
+sort(dims[,2])  
+
+aus.split$`MGI3522_CKAE-SU804-1` <- NULL # low cells count
+
+VlnPlot(microglia.aus, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) # checking amount of umis per cell (reason: sct can work better if varying range of umis per cell)
+VlnPlot(micro_AD_CO, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+micro_AD_CO$percent.mt <- pmin(micro_AD_CO$percent.mt, 10)
+VlnPlot(micro_AD_CO, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+Reason for the sporadic 'Idents' numbers: The object was subset from a larger dataset - the microglia was subseted.
+Merging in not required but recommended b/c it requires the same features across objects. Harmony works on PCA embeddings, PCA is built from shared genes anyway so using common genes avoids problems.
+```{r}
+# match genes - keeps only genes present in both 
+common_genes <- intersect(
+  rownames(microglia.aus),
+  rownames(micro_AD_CO)
+)
+microglia.aus <- subset(microglia.aus, features = common_genes) # changed from 32547 genes to 31194 genes 
+micro_AD_CO <- subset(micro_AD_CO, features = common_genes) # changed from 32569 genes to 31194 genes 
+dim(microglia.aus)
+dim(micro_AD_CO)
+length(intersect(rownames(microglia.aus), rownames(micro_AD_CO))) # checking overlap - should correspond w/ genes 
+```
+
+checking class - class() checking structure - str()
+```{r}
+# merge objects - combines cells from both datasets 
+combined <- merge(
+  microglia.aus,
+  y = micro_AD_CO,
+  add.cell.ids = c("AUS", "ADCO"))
+dim(combined) 
+length(table(combined$orig.ident))
+```
+
+```{r}
+# creating a metadata column that labels which dataset each cell came from
+combined$batch <- ifelse(
+  grepl("^AUS_", colnames(combined)),
+  "AUS",
+  "ADCO"
+)
+table(combined$batch) # sanity check 
+```
+
+Note: you can use SCTransform and Harmony together.
+```{r}
+# split the single object into a list of objects by sample/identity
+combined <- SplitObject(combined, split.by = "orig.ident")
+
+# filter out objects whose RNA counts matrix has 0 genes
+combined <- combined[sapply(combined, function(x)
+    dim(GetAssayData(x, assay = "RNA", layer = "counts"))[1] > 0)]
+
+# remove these three samples that have very few cells
+combined$`46_16258_F` <- NULL
+combined$`5_1442_F` <- NULL
+combined$`MGI3522_CKAE-SU804-1` <- NULL # from aus
+```
+
+# Renormalize data
+```{r}
+# run SCTransform on the list (use lapply instead of sapply for objects)
+combined <- lapply(combined, function(x) {
+    print(unique(x$orig.ident))
+    SCTransform(
+      x,
+      vars.to.regress = c("nFeature_RNA", "subsets_Mito_percent", "subsets_Ribo_percent"),
+      verbose = TRUE,
+      return.only.var.genes = FALSE,
+      variable.features.n = Inf
+    )
+})
+class(combined) # check class 
+```
+
+# Get the list of protein coding genes 
+```{r}
+library(biomaRt)
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+pc <- getBM(attributes = c("hgnc_symbol", "gene_biotype"),
+            mart = ensembl) %>% 
+  filter(gene_biotype == "protein_coding", hgnc_symbol != "") 
+pc <- unique(pc$hgnc_symbol)
+```
+
+# Exclude non-coding genes
+```{r}
+all_var_features <- c()
+# select only protein-coding variable genes and add them to all variable features vector
+for (x in combined) {
+    sample_var_genes <- x$SCT@var.features[x$SCT@var.features %in% pc]
+    print(length(sample_var_genes))
+    print(length(sample_var_genes))
+    all_var_features <- union(all_var_features, sample_var_genes)
+}
+print(length(all_var_features))
+
+# exclude genes that are not expressed in all datasets
+# the limiting step to get a higher number of genes is this filtering
+# in this case, 2300 genes are expressed across all samples
+for (x in combined) {
+    all_var_features <- all_var_features[all_var_features %in% rownames(x$SCT)]
+}
+print(length(all_var_features)) 
+head(all_var_features)
+```
+
+```{r}
+list_genes <- map(combined, function(x) { x$SCT@var.features[x$SCT@var.features %in% pc] })
+
+# initialize matrix
+samples <- names(list_genes)
+n <- length(samples)
+shared_matrix <- matrix(0, nrow = n, ncol = n, dimnames = list(samples, samples))
+
+# Calculate pairwise proportion of shared proteins (Jaccard index)
+for (i in seq_along(samples)) {
+  for (j in seq_along(samples)) {
+    a <- list_genes[[i]]
+    b <- list_genes[[j]]
+    shared_matrix[i, j] <- length(intersect(a, b)) / length(union(a, b))
+  }
+}
+
+# load library and plot
+pheatmap(shared_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         main = "Proportion of shared proteins")
+```
+
+# Drop samples 13, 21, 27, 54 and 'MGI3522_CKAE-SU639-1'
+```{r}
+combined <- combined[-c(grep("^13_|^21_|^27_|^54_", names(combined)))]
+combined <- combined[!names(combined) %in% "MGI3522_CKAE-SU639-1"]
+
+all_var_features <- c() 
+# select only protein-coding variable genes and add them to all variable features vector
+for (x in combined) {
+    sample_var_genes <- x$SCT@var.features[x$SCT@var.features %in% pc]
+    print(length(sample_var_genes))
+    print(length(sample_var_genes))
+    all_var_features <- union(all_var_features, sample_var_genes)
+}
+print(length(all_var_features))
+
+# exclude genes that are not expressed in all datasets
+# the limiting step to get a higher number of genes is this filtering
+# in this case, 2300 genes are expressed across all samples
+for (x in combined) {
+  print(length(rownames(x$SCT)))
+    all_var_features <- all_var_features[all_var_features %in% rownames(x$SCT)]
+}
+print(length(all_var_features))
+
+# Plot heatmap again
+list_genes <- map(combined, function(x) { x$SCT@var.features[x$SCT@var.features %in% pc] })
+
+# initialize matrix
+samples <- names(list_genes)
+n <- length(samples)
+shared_matrix <- matrix(0, nrow = n, ncol = n, dimnames = list(samples, samples))
+
+# calculate pairwise proportion of shared proteins (Jaccard index)
+for (i in seq_along(samples)) {
+  for (j in seq_along(samples)) {
+    a <- list_genes[[i]]
+    b <- list_genes[[j]]
+    shared_matrix[i, j] <- length(intersect(a, b)) / length(union(a, b))
+  }
+}
+
+pheatmap(shared_matrix,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         main = "Proportion of shared proteins")
+```
+
+```{r}
+# merge list into one object 
+combined_merged <- merge(combined[[1]], y = combined[-1])
+```
+
+```{r}
+# define your hvgs
+all_var_features
+VariableFeatures(combined_merged) <- all_var_features
+```
+
+```{r}
+# run pca (this is now your “integration input”)
+combined_merged <- RunPCA(
+  combined_merged,
+  features = all_var_features,
+  npcs = 20,
+  verbose = TRUE
+)
+ElbowPlot(combined_merged)
+```
+
+# Integrate
+```{r}
+# integrating + batch correcting by donor 
+combined_merged <- IntegrateLayers(
+  object = combined_merged,
+  method = HarmonyIntegration,
+  orig.reduction = "pca",
+  new.reduction = "harmony",
+  group.by = "orig.ident"
+)
+```
+
+# PCA + Neighbors + Clustering 
+```{r}
+# neighbors + clustering + pca 
+combined_merged <- combined_merged %>% 
+  RunPCA(verbose = T) %>%
+  RunUMAP(dims = 1:20, verbose = T) %>%
+  FindNeighbors(dims = 1:20, verbose = T) %>% 
+  FindClusters(resolution = c(0.01, 0.05, 0.1, seq(0.2, 1.4, 0.2)))
+
+DimPlot(combined_merged, group.by = c("integrated_snn_res.0.2"), label = T)
+```
+
+```{r}
+# neighbors + clustering + umap - .1
+combined_merged.1 <- RunUMAP(combined_merged, reduction = "harmony", dims = 1:20)
+combined_merged.1 <- FindNeighbors(combined_merged, reduction = "harmony", dims = 1:20)
+combined_merged.1 <- FindClusters(combined_merged, resolution = c(0.01, 0.05, 0.1, seq(0.2, 1.4, 0.2)))
+```
+
+--------------------------------------------------------------------------------
+# Load data w/o whole process
+```{r}
+combined_merged <- readRDS("combined_merged")
+```
+
+# Validations of integration
+```{r}
+# plot by donor before vs after
+DimPlot(combined_merged, reduction = "pca", group.by = "orig.ident") + NoLegend() # PCA → cells separate by donor
+DimPlot(combined_merged, reduction = "harmony", group.by = "orig.ident") + NoLegend() # Harmony → donors are mixed within clusters
+
+# plot clusters after Harmony
+DimPlot(combined_merged, reduction = "harmony", label = TRUE)
+
+# quantify mixing
+table(combined_merged$orig.ident, combined_merged$seurat_clusters) # each cluster contains multiple donors (not dominated by one)
+# raw cell counts (number of cells from each donor in each cluster)
+```
+
+# Visualizations
+PCA and harmony showed the same non-mixing of data on plot. Why?
+```{r}
+Reductions(combined_merged) # check reductions 
+colnames(combined_merged@meta.data) # check metadata
+
+# testing combined_merged
+DimPlot(combined_merged, reduction = "umap") # this is the seurat clusters
+DimPlot(combined_merged, split.by = "batch") # this is the seurat clusters but split by batch 
+DimPlot(combined_merged, reduction = "umap", group.by = "orig.ident") + NoLegend() # should be mixed
+DimPlot(combined_merged, reduction = "umap", group.by = "batch") # AUS vs ADCO mixed
+DimPlot(combined_merged, reduction = "umap", group.by = "Status") # AD vs control still separable
+
+# testing combined_merged.1
+DimPlot(combined_merged.1, reduction = "umap") # seurat clusters 
+DimPlot(combined_merged.1, reduction = "umap", group.by = "orig.ident") + NoLegend() # should be mixed
+DimPlot(combined_merged.1, reduction = "umap", group.by = "batch") # AUS vs ADCO mixed
+DimPlot(combined_merged.1, reduction = "umap", group.by = "Status") # AD vs control still separable
+
+# comparisons 
+DimPlot(combined_merged.1, reduction = "umap", group.by = "integrated_snn_res.0.2")
+DimPlot(combined_merged.1, reduction = "umap", group.by = "SCT_snn_res.0.2")
+```
+
+# Combining sub-status
+```{r}
+# split by batch, status, & explanatory status (ex: young & old controls)
+combined_merged$Status_combined <- ifelse(
+  !is.na(combined_merged$Case_sub_status),
+  paste0("AUS_", combined_merged$Case_sub_status),
+  paste0("P4_", combined_merged$Status2)
+)
+table(combined_merged$Case_sub_status)
+table(combined_merged$Status2)
+table(combined_merged$Status_combined)
+DimPlot(combined_merged, reduction = "umap", group.by = "Status_combined")
+# DimPlot(combined_merged, reduction = "umap_cnmf", group.by = "Status_combined")
+
+# combined all controls together - including each batch 
+combined_merged$Status_mixed <- ifelse(
+  grepl("CT|CO", combined_merged$Status_combined),
+  "Control",
+  combined_merged$Status_combined
+)
+table(combined_merged$Status_mixed)
+table(combined_merged$Status_combined[combined_merged$Status_mixed == "Control"])
+DimPlot(combined_merged, reduction = "umap", group.by = "Status_mixed")
+# DimPlot(combined_merged, reduction = "umap_cnmf", group.by = "Status_mixed")
+table(combined_merged$seurat_clusters, combined_merged$Status_mixed) # sub status proportions across all clusters 
+
+# combining AUS_sporadic & P4_AD
+combined_merged$Status_final <- ifelse(
+  combined_merged$Status_mixed %in% c("AUS_sporadic", "P4_AD"),
+  "sAD",
+  combined_merged$Status_mixed
+)
+
+table(combined_merged$Status_final) 
+DimPlot(combined_merged, reduction = "umap", group.by = "Status_final")
+# DimPlot(combined_merged, reduction = "umap_cnmf", group.by = "Status_final")
+
+# combined all controls together - split by batch 
+combined_merged$Status.3 <- ifelse(
+  grepl("CT", combined_merged$Status_combined),
+  "AUS_control",
+  ifelse(
+    grepl("CO", combined_merged$Status_combined),
+    "P4_control",
+    combined_merged$Status_combined
+  )
+)
+table(combined_merged$Status.3)
+DimPlot(combined_merged, reduction = "umap", group.by = "Status.3")
+# DimPlot(combined_merged, reduction = "umap_cnmf", group.by = "Status.3")
+table(combined_merged$seurat_clusters, combined_merged$Status_mixed) # sub status proportions across all clusters 
+
+```
+
+# What your mentor specifically wants (cohort proportions per cluster)
+```{r}
+# quantify mixing - showing the number of cells from that donor in that cluster
+table(combined_merged$orig.ident, combined_merged$seurat_clusters) 
+sum(table(combined_merged$orig.ident, combined_merged$seurat_clusters)) # making sure that it equals the total number of cells 
+ncol(combined_merged) # should match 
+
+# proportion table
+tab <- table(combined_merged$batch, combined_merged$seurat_clusters)
+prop_tab <- prop.table(tab, margin = 2)  # normalize per cluster
+prop_tab # values = fraction of cells from each cohort in that cluster
+# observation: cluster 13 is only represented by the Australia data - not by just 1 donor though
+
+# plot 
+df <- as.data.frame(prop_tab)
+colnames(df) <- c("Batch", "Cluster", "Proportion")
+ggplot(df, aes(x = Cluster, y = Proportion, fill = Batch)) +
+  geom_bar(stat = "identity") +
+  theme_classic()
+
+# check if cluster 13 is AD vs CO vs mixed
+table(combined_merged$Status, combined_merged$seurat_clusters)
+
+# proportion table - status_mixed
+tab <- table(combined_merged$Status_mixed, combined_merged$seurat_clusters)
+prop_tab <- prop.table(tab, margin = 2)  # normalize per cluster
+prop_tab # values = fraction of cells from each cohort in that cluster
+
+# plot 
+df <- as.data.frame(prop_tab)
+colnames(df) <- c("Status_mixed", "Cluster", "Proportion")
+ggplot(df, aes(x = Cluster, y = Proportion, fill = Status_mixed)) + geom_bar(stat = "identity") + theme_classic()
+
+# proportion table - status_final
+tab <- table(combined_merged$Status_final, combined_merged$seurat_clusters)
+prop_tab <- prop.table(tab, margin = 2)  # normalize per cluster
+prop_tab # values = fraction of cells from each cohort in that cluster
+
+# plot 
+df <- as.data.frame(prop_tab)
+colnames(df) <- c("Status_final", "Cluster", "Proportion")
+ggplot(df, aes(x = Cluster, y = Proportion, fill = Status_final)) +
+  geom_bar(stat = "identity") +
+  theme_classic()
+
+# proportion table - status.3
+tab <- table(combined_merged$Status.3, combined_merged$seurat_clusters)
+prop_tab <- prop.table(tab, margin = 2)  # normalize per cluster
+prop_tab # values = fraction of cells from each cohort in that cluster
+
+# plot 
+df <- as.data.frame(prop_tab)
+colnames(df) <- c("Status.3", "Cluster", "Proportion")
+ggplot(df, aes(x = Cluster, y = Proportion, fill = Status.3)) +
+  geom_bar(stat = "identity") +
+  theme_classic()
+```
+
+```{r}
+# create directory
+# dir.create("downstream/new_filtering/qs/harmony_integrated", recursive = TRUE, showWarnings = FALSE)
+qsave(combined_merged, file = "downstream/new_filtering/qs/harmony_integrated/phase4+australia.fromqmd")
+```
+
+# Saving files to export for cnmf in python
+```{r}
+# 1. save HVG gene list
+write.table(
+  all_var_features,
+  file = "microglia_cnmf_input/R_1211_genes.txt",
+  quote = FALSE,
+  row.names = FALSE,
+  col.names = FALSE
+)
+
+# 2. extract counts matrix
+counts <- GetAssayData(combined_merged, assay = "RNA", slot = "counts")
+counts <- as(counts, "dgCMatrix")
+# sanity check
+dim(counts) # should bee 24388 cells 
+
+# 3. save matrix (MTX format)
+writeMM(counts, "microglia_cnmf_input/matrix_1211.mtx")
+
+# 4. save genes + barcodes
+write.table(
+  rownames(counts),
+  "microglia_cnmf_input/genes_1211.tsv",
+  row.names = FALSE,
+  col.names = FALSE,
+  quote = FALSE
+)
+
+write.table(
+  colnames(counts),
+  "microglia_cnmf_input/barcodes_1211.tsv",
+  row.names = FALSE,
+  col.names = FALSE,
+  quote = FALSE
+)
+
+# 5. save metadata 
+write.table(
+  combined_merged@meta.data,
+  "microglia_cnmf_input/metadata_1211.tsv",
+  sep = "\t",
+  quote = FALSE,
+  col.names = NA   # <-- IMPORTANT (keeps cell IDs aligned)
+)
+
+# 6. check files
+list.files("microglia_cnmf_input")
+```
+
+--------------------------------------------------------------------------------
+# Analysis after running cnmf 
+```{r}
+# loading coordinates 
+umap_coords <- read.csv(
+  "microglia_batchcorrect/microglia_1211/microglia_umap_1211_coords.csv",
+  row.names = 1
+)
+combined_merged[["umap_cnmf"]] <- CreateDimReducObject(
+  embeddings = as.matrix(umap_coords),
+  key = "UMAPCNMF_",
+  assay = DefaultAssay(combined_merged)
+)
+```
+
+```{r}
+# load cnmf results back into R
+data_dir <- "./microglia_batchcorrect/microglia_1211"
+
+# usage → cell-by-program matrix
+usage_file <- file.path(
+  data_dir,
+  "microglia_1211.usages.k_8.dt_0_1.consensus.txt"
+)
+# spectra_score → gene-by-program scores
+spectra_score_file <- file.path(
+  data_dir,
+  "microglia_1211.gene_spectra_score.k_8.dt_0_1.txt"
+)
+# spectra_tpm → gene expression per program
+spectra_tpm_file <- file.path(
+  data_dir,
+  "microglia_1211.gene_spectra_tpm.k_8.dt_0_1.txt"
+)
+
+usage <- read.table(usage_file, sep="\t", header=TRUE, row.names=1)
+spectra_score <- read.table(spectra_score_file, sep="\t", header=TRUE, row.names=1)
+spectra_tpm <- read.table(spectra_tpm_file, sep="\t", header=TRUE, row.names=1)
+
+# normalize usage
+usage_norm <- t(apply(usage, 1, function(x) x / sum(x))) # This makes each cell sum to 1 so programs become interpretable proportions.
+usage_norm <- as.data.frame(usage_norm)
+
+# add usage back into your Seurat object
+combined_merged@meta.data <- cbind(
+  combined_merged@meta.data,
+  usage_norm
+)
+
+head(combined_merged@meta.data[, colnames(usage_norm)]) # check if added to metadata
+```
+
+```{r}
+# plot programs on UMAP
+FeaturePlot(
+  combined_merged,
+  features = colnames(usage_norm),
+  reduction = "umap_cnmf",
+  combine = FALSE
+)
+
+library(patchwork)
+plots <- FeaturePlot(
+  combined_merged,
+  features = colnames(usage_norm),
+  reduction = "umap_cnmf",
+  combine = FALSE
+)
+wrap_plots(plots, ncol = 4)
+
+```
+```{r}
+# dominant Program per Cell
+dominant_program <- apply(usage[,1:8], 1, which.max)
+combined_merged$dominant_program <- dominant_program
+DimPlot(combined_merged, group.by = "dominant_program", reduction = "umap_cnmf")
+```
+```{r}
+# one UMAP per Dominant Program
+dominant_program <- apply(usage[,1:8], 1, which.max) # Determine dominant program
+combined_merged$dominant_program <- paste0("Program_", dominant_program)
+DimPlot(
+  combined_merged,
+  cells.highlight = colnames(combined_merged)[combined_merged$dominant_program == "Program_1"]
+)
+# loop 
+p1_cells <- colnames(combined_merged)[combined_merged$dominant_program == "Program_1"]
+DimPlot(
+  combined_merged,
+  cells.highlight = p1_cells
+)
+for(i in 1:8){
+  
+  prog_name <- paste0("Program_", i)
+  
+  cells <- colnames(combined_merged)[combined_merged$dominant_program == prog_name]
+  
+  print(
+    DimPlot(
+      combined_merged,
+      reduction = "umap_cnmf",
+      cells.highlight = cells
+    ) + ggtitle(prog_name)
+  )
+}
+
+```
+
+# Top genes per program 
+```{r}
+# extract top genes per GEP
+get_top_genes <- function(row){
+  top_idx <- order(row, decreasing=TRUE)[1:100]
+  colnames(spectra_score)[top_idx]
+}
+top_genes <- apply(spectra_score, 1, get_top_genes)
+top_genes <- as.data.frame(top_genes)
+top_genes
+
+# saving file for enrichment analysis in r
+top_list <- lapply(rownames(spectra_score), function(p){
+  get_top_genes_df(p, spectra_score, n = 100) # getting top 100 genes per program 
+})
+top_genes_df <- do.call(rbind, top_list)
+
+# write to file - saving to export to terminal r for enrichment analysis 
+write.csv(
+  top_genes_df,
+  "combined_merged.1_cnmf_k8_top100_genes.csv",
+  row.names = FALSE
+)
+```
+
+# Plot distribution of genes programs per individual to identify programs more prevalent in AD vs controls
+```{r}
+# get your usage matrix into metadata
+usage <- usage[colnames(combined_merged), ]
+combined_merged@meta.data <- cbind(combined_merged@meta.data, usage)
+# Add donor + condition info
+combined_merged$orig.ident
+combined_merged$Status   # "AD" or "Control"
+any(duplicated(colnames(combined_merged@meta.data))) # is anything duplicated 
+colnames(combined_merged@meta.data)[duplicated(colnames(combined_merged@meta.data))] # what is duplicated 
+colnames(usage) <- paste0("Program_", seq_len(ncol(usage))) # Rename program columns to program...
+# re-add to metadata
+combined_merged@meta.data <- combined_merged@meta.data[, 
+                                                   !colnames(combined_merged@meta.data) %in% colnames(usage)
+]
+combined_merged@meta.data <- cbind(combined_merged@meta.data, usage)
+# aggregate to donor level
+program_cols <- colnames(usage)
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status) %>%
+  summarise(across(all_of(program_cols), mean))
+combined_merged@meta.data[program_cols] <- lapply(
+  combined_merged@meta.data[program_cols],
+  as.numeric
+)
+
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status) %>%
+  summarise(across(all_of(program_cols), mean), .groups = "drop")
+# convert to long format for plotting
+plot_df <- donor_program_usage %>%
+  pivot_longer(
+    cols = all_of(program_cols),
+    names_to = "Program",
+    values_to = "Usage"
+  )
+# plot distributions
+ggplot(plot_df, aes(x = Status, y = Usage, fill = Status)) +
+  geom_boxplot() +
+  facet_wrap(~ Program, scales = "free_y") +
+  theme_classic()
+
+# statistical testing - to formally identify programs enriched in AD
+stats <- plot_df %>%
+  group_by(Program) %>%
+  wilcox_test(Usage ~ Status) %>%
+  adjust_pvalue(method = "BH")
+
+# ploting for status_mixed
+# aggregate to donor level
+program_cols <- colnames(usage)
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status_mixed) %>%
+  summarise(across(all_of(program_cols), mean))
+combined_merged@meta.data[program_cols] <- lapply(
+  combined_merged@meta.data[program_cols],
+  as.numeric
+)
+
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status_mixed) %>%
+  summarise(across(all_of(program_cols), mean), .groups = "drop")
+# convert to long format for plotting
+plot_df <- donor_program_usage %>%
+  pivot_longer(
+    cols = all_of(program_cols),
+    names_to = "Program",
+    values_to = "Usage"
+  )
+# plot distributions
+ggplot(plot_df, aes(x = Status_mixed, y = Usage, fill = Status_mixed)) +
+  geom_boxplot() +
+  facet_wrap(~ Program, scales = "free_y") +
+  theme_classic()
+
+# statistical Testing - to formally identify programs enriched in AD
+stats <- plot_df %>%
+  group_by(Program) %>%
+  wilcox_test(Usage ~ Status_mixed) %>%
+  adjust_pvalue(method = "BH")
+
+# ploting for status_final
+# aggregate to donor level
+program_cols <- colnames(usage)
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status_final) %>%
+  summarise(across(all_of(program_cols), mean))
+combined_merged@meta.data[program_cols] <- lapply(
+  combined_merged@meta.data[program_cols],
+  as.numeric
+)
+
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status_final) %>%
+  summarise(across(all_of(program_cols), mean), .groups = "drop")
+# convert to long format for plotting
+plot_df <- donor_program_usage %>%
+  pivot_longer(
+    cols = all_of(program_cols),
+    names_to = "Program",
+    values_to = "Usage"
+  )
+# plot distributions
+ggplot(plot_df, aes(x = Status_final, y = Usage, fill = Status_final)) +
+  geom_boxplot() +
+  facet_wrap(~ Program, scales = "free_y") +
+  theme_classic()
+
+# statistical Testing - to formally identify programs enriched in AD
+stats <- plot_df %>%
+  group_by(Program) %>%
+  wilcox_test(Usage ~ Status_final) %>%
+  adjust_pvalue(method = "BH")
+
+# ploting for status.3
+# aggregate to donor level
+program_cols <- colnames(usage)
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status.3) %>%
+  summarise(across(all_of(program_cols), mean))
+combined_merged@meta.data[program_cols] <- lapply(
+  combined_merged@meta.data[program_cols],
+  as.numeric
+)
+
+donor_program_usage <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status.3) %>%
+  summarise(across(all_of(program_cols), mean), .groups = "drop")
+# convert to long format for plotting
+plot_df <- donor_program_usage %>%
+  pivot_longer(
+    cols = all_of(program_cols),
+    names_to = "Program",
+    values_to = "Usage"
+  )
+# plot distributions
+ggplot(plot_df, aes(x = Status.3, y = Usage, fill = Status.3)) +
+  geom_boxplot() +
+  facet_wrap(~ Program, scales = "free_y") +
+  theme_classic()
+
+# statistical testing - to formally identify programs enriched in AD
+stats <- plot_df %>%
+  group_by(Program) %>%
+  wilcox_test(Usage ~ Status.3) %>%
+  adjust_pvalue(method = "BH")
+```
+
+# Fisher exact test - compared to Anjali's paper - do after gene overap analysis 
+```{r}
+# asssign each cell a cell state
+usage <- combined_merged@meta.data[, program_cols]
+# assign dominant program per cell
+combined_merged$top_program <- colnames(usage)[max.col(usage, ties.method = "first")]
+
+# fixed mapping (match Program_1 ... Program_8)
+program_to_state <- c(
+  "Program_1" = "Homeostatic",
+  "Program_2" = "IFN-III",
+  "Program_3" = "No Overlap",
+  "Program_4" = "IFN-I",
+  "Program_5" = "DAM",
+  "Program_6" = "IFN-II",
+  "Program_7" = "MHCII",
+  "Program_8" = "No Overlap"   # <-- you MUST define this
+)
+
+# assign states (correct way)
+cell_states <- program_to_state[combined_merged$top_program]
+names(cell_states) <- colnames(combined_merged)
+combined_merged$cell_state <- cell_states
+table(combined_merged$cell_state, useNA = "ifany") # check
+
+state_props <- combined_merged@meta.data %>%
+  group_by(orig.ident, Status, cell_state) %>%
+  summarise(n_cells = n(), .groups = "drop") %>%
+  group_by(orig.ident) %>%
+  mutate(prop = n_cells / sum(n_cells))
+
+stats_states <- state_props %>%
+  group_by(cell_state) %>%
+  wilcox_test(prop ~ Status) %>%
+  adjust_pvalue(method = "BH")
+
+ggplot(state_props, aes(x = Status, y = prop, fill = Status)) +
+  geom_violin(trim = FALSE) +
+  geom_boxplot(width = 0.1) +
+  facet_wrap(~ cell_state, scales = "free_y") +
+  theme_classic()
+
+# order the states
+combined_merged$cell_state <- factor(
+  combined_merged$cell_state,
+  levels = c("Homeostatic", "DAM", "IFN-I", "IFN-II", "IFN-III", "MHCII")
+)
+
+DimPlot(combined_merged, reduction = "umap_cnmf", label = T) + ggtitle("Cluster Overlay")# seurat clusters - r clusters overlay
+DimPlot(combined_merged, group.by = "batch", reduction = "umap_cnmf", label = T) + ggtitle("Batch") # AUS vs ADCO mixed
+DimPlot(combined_merged, group.by = "orig.ident", reduction = "umap_cnmf") + NoLegend() + ggtitle("Donor") 
+DimPlot(combined_merged, group.by = "Status_final", reduction = "umap_cnmf") + ggtitle("Status Final") 
+DimPlot(combined_merged, group.by = "dominant_program", reduction = "umap_cnmf") + ggtitle("Dominant Program")
+DimPlot(combined_merged, group.by = "cell_state", reduction = "umap_cnmf", split.by = "Status_final") + ggtitle("Status_final")
+VlnPlot(combined_merged, features = "percent.mt") 
+
+DimPlot(combined_merged, group.by = "top_program", reduction = "umap_cnmf", label = T) + ggtitle("Dominant Program") # 8 dominant programs 
+DimPlot(combined_merged, group.by = "cell_state", reduction = "umap_cnmf", label = T) + ggtitle("Cell State") # state labels 
+DimPlot(combined_merged, group.by = "cell_state", reduction = "umap_cnmf", label = TRUE, repel = TRUE) # state labels 
+DimPlot(combined_merged, group.by = "cell_state", reduction = "umap_cnmf", split.by = "batch") + ggtitle("Batch Split") # state label by batch 
+DimPlot(combined_merged, group.by = "cell_state", reduction = "umap_cnmf") +
+  facet_wrap(~ cell_state) + ggtitle("Cell States")
+
+DimPlot(combined_merged, group.by = "top_program", reduction = "umap_cnmf") +
+  facet_wrap(~ top_program) + ggtitle("Dominant Program")
+
+DimPlot(combined_merged, group.by = "cell_state", reduction = "umap_cnmf", split.by = "Status.3") + ggtitle("Status.3 Split") # state label by status.3 
+DimPlot(combined_merged, group.by = "top_program", reduction = "umap_cnmf", split.by = "Status.3") + ggtitle("Status.3 Split") # state label by status.3  
+
+# ---- same facet plot wut including the rest of the cells in the plot as grey ----
+# extract UMAP coordinates
+umap_df <- Embeddings(combined_merged, "umap_cnmf") %>%
+  as.data.frame()
+umap_df$top_program <- combined_merged$top_program
+# Create a plotting dataframe: highlight cells belonging to facet program, everything else stays grey
+plot_list <- lapply(unique(umap_df$top_program), function(p) {
+  tmp <- umap_df
+  tmp$highlight <- ifelse(tmp$top_program == p, p, "Other")
+  tmp$facet_program <- p
+  tmp
+})
+
+plot_df <- bind_rows(plot_list)
+program_colors <- c(
+  "Program_1" = "#F8766D",
+  "Program_2" = "#D89000",
+  "Program_3" = "#7CAE00",
+  "Program_4" = "#00BA38",
+  "Program_5" = "#00BFC4",
+  "Program_6" = "#619CFF",
+  "Program_7" = "#C77CFF",
+  "Program_8" = "#FF61CC",
+  "Other" = "grey85"
+)
+
+ggplot(plot_df,
+       aes(UMAPCNMF_1, UMAPCNMF_2, color = highlight)) +
+  geom_point(size = 0.2) +
+  facet_wrap(~ facet_program) +
+  scale_color_manual(values = program_colors) +
+  theme_classic() +
+  labs(
+    title = "Dominant Program",
+    color = NULL
+  ) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+colnames(combined_merged@meta.data)
+
+tab <- table(combined_merged$batch, combined_merged$dominant_program)
+addmargins(tab)
+
+```
+
+# Number of programs per cell
+```{r}
+# create histogram showing distribution of programs expressed per cell (1 program, 2 programs, 3 programs... 4,5,6,7,8)
+class(usage) # check what the usage matrix is (data-frame)
+str(usage)
+# convert just the numeric part - to view histogram for picking threshold 
+usage_numeric <- as.matrix(usage[,1:8])
+hist(usage_numeric)
+# look at distribution - a big spike near 0 (noise) / a tail of higher values (real signal) - you want something that separates those 
+hist(usage_numeric)
+hist(as.vector(usage_numeric)) # same thing
+
+# decide what counts as “expressed” - “Only count a program if it contributes enough to the cell”
+threshold <- 0.1
+
+# count programs per cell - Convert usage → binary (expressed or not), then sum per cell:
+## usage_matrix = cells x programs
+binary_usage <- usage > threshold
+programs_per_cell <- rowSums(binary_usage)
+
+# plot histogram
+hist(programs_per_cell,
+     breaks = 0:max(programs_per_cell),
+     main = "Programs per Cell",
+     xlab = "Number of Programs",
+     ylab = "Number of Cells")
+
+# ggplot2 (better visualization)
+df <- data.frame(programs_per_cell = programs_per_cell)
+
+ggplot(df, aes(x = programs_per_cell)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black") +
+  labs(title = "Distribution of Programs per Cell",
+       x = "Number of Programs Expressed",
+       y = "Cell Count") +
+  theme_minimal()
+
+# discrete bar plot
+ggplot(df, aes(x = factor(programs_per_cell))) +
+geom_bar(fill = "steelblue") +
+  labs(title = "Programs per Cell",
+       x = "Number of Programs",
+       y = "Number of Cells") +
+  theme_minimal()
+
+max(programs_per_cell) # check if any cells express all 7 programs
+sum(programs_per_cell == 7) # 0 → none exist
+table(programs_per_cell) # look at the full distribution (including zeros) 
+table(df$programs_per_cell)
+## no cells meet your threshold for all 8 programs ##
+
+# add programs_per_cell back into your Seurat object
+combined_merged@meta.data <- cbind(
+  combined_merged@meta.data,
+  programs_per_cell
+)
+
+head(combined_merged@meta.data[, colnames(programs_per_cell)]) # check if added to metadata
+```
+
+# Histogram showing distribution of usage ranges for each program
+```{r}
+# example: df should contain donor_id, cell_id, program, usage
+# ---- bin usage into ranges ----
+df_hist <- df.2 %>%
+  mutate(
+    usage_bin = cut(
+      usage,
+      breaks = seq(0, 1, by = 0.1),   # adjust if needed
+      include.lowest = TRUE
+    )
+  )
+# ---- histogram / barplot of usage distribution per program ----
+ggplot(df_hist, aes(x = usage_bin, fill = usage_bin)) +
+  geom_bar(color = "black") +
+  facet_wrap(~ program, scales = "free_y") +
+  labs(
+    title = "Distribution of Usage Values for Each Program",
+    x = "Program Usage Range",
+    y = "Number of Cells"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+# ---- create usage bins ----
+df_counts <- df.2 %>%
+  mutate(
+    usage_bin = cut(
+      usage,
+      breaks = seq(0, 1, by = 0.1),
+      include.lowest = TRUE
+    )
+  ) %>%
+  # count cells per program per usage range
+  count(program, usage_bin) %>%
+  # optional: make table wide format
+  tidyr::pivot_wider(
+    names_from = usage_bin,
+    values_from = n,
+    values_fill = 0
+  )
+
+df_counts
+
+# ---- continuous histogram instead of discrete bins ----
+ggplot(df.2, aes(x = usage)) +
+  geom_histogram(
+    bins = 30,
+    color = "black",
+    fill = "steelblue"
+  ) +
+  facet_wrap(~ program, scales = "free_y") +
+  labs(
+    title = "Program Usage Distributions",
+    x = "Usage",
+    y = "Cell Count"
+  ) +
+  theme_bw()
+
+# ---- histogram of dominant program counts per cell by usage bin ----
+# ---- create matching program labels ----
+df_dom <- df.2 %>%
+  mutate(
+    dominant_match = paste0(
+      "X",
+      gsub("Program_", "", dominant_program)
+    )
+  ) %>%
+  filter(program == dominant_match)
+
+table(df_dom$program) # check
+table(df_dom$dominant_program) # check 
+
+df_dom_counts <- df_dom %>%
+  mutate(
+    usage_bin = cut(
+      usage,
+      breaks = seq(0, 1, by = 0.1),
+      include.lowest = TRUE
+    )
+  ) %>%
+  count(dominant_program, usage_bin) %>%
+  tidyr::pivot_wider(
+    names_from = usage_bin,
+    values_from = n,
+    values_fill = 0
+  )
+
+df_dom_counts
+
+# ---- percentages of df_dom_counts ----
+tab <- df_dom_counts
+mat <- as.matrix(tab[,-1])
+rownames(mat) <- tab$dominant_program
+
+prop_row <- prop.table(mat, margin = 1) * 100
+round(prop_row, 1)
+# Add row totals
+tab_row_total <- cbind(mat, Total = rowSums(mat))
+tab_row_total
+# Add bottom column totals
+tab_full <- rbind(
+  tab_row_total,
+  Total = c(colSums(mat), sum(mat))
+)
+tab_full
+
+# Counts + percentages together
+prop_row <- prop.table(mat, 1) * 100
+combined <- matrix(
+  paste0(mat, " (", round(prop_row, 1), "%)"),
+  nrow = nrow(mat)
+)
+rownames(combined) <- rownames(mat)
+colnames(combined) <- colnames(mat)
+combined
+# Add totals to combined table
+combined_df <- as.data.frame(combined)
+combined_df$Total <- rowSums(mat)
+bottom_row <- c(colSums(mat), sum(mat))
+combined_df <- rbind(combined_df, Total = bottom_row)
+combined_df
+
+prop.table(mat, 1)
+
+# ---- histogram of dominant program ----
+programs <- unique(df_dom$dominant_program)
+
+for (p in programs) {
+
+  df_p <- df_dom %>%
+    filter(dominant_program == p)
+
+  p1 <- ggplot(df_p, aes(x = usage)) +
+    geom_histogram(
+      bins = 30,
+      fill = "steelblue",
+      color = "black"
+    ) +
+    labs(
+      title = paste("Usage Distribution for Dominant Program:", p),
+      x = "Usage",
+      y = "Number of Cells"
+    ) +
+    theme_bw()
+
+  print(p1)
+}
+
+# another histogram - aligned with the counts by 10s 
+head(df_hist$program)
+head(df_hist$dominant_program)
+
+df_hist <- df_hist %>%
+  mutate(
+    program = sub("^X", "Program_", program)
+  )
+
+df_dom_hist <- df_hist %>%
+  filter(program == dominant_program)
+
+nrow(df_dom_hist) # should be all cells 
+table(df_dom_hist$program)
+head(df_hist$program)
+head(df_hist$dominant_program)
+
+ggplot(df_dom_hist, aes(x = usage_bin, fill = usage_bin)) +
+  geom_bar(color = "black") +
+  facet_wrap(~ program, scales = "free_y") +
+  labs(
+    title = "Distribution of Usage Values for Dominant Cells per Program",
+    x = "Program Usage Range",
+    y = "Number of Cells"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+# question: for the cells that have low usage but still are dominate for a program, i want to see what to other usage ratios are for the other program. just bc the usage is low but yet still dominant. 
+```
+
+# Line graph showing programs and their usage ranges
+```{r}
+# ---- bin usage values ----
+df_line <- df.2 %>%
+  mutate(
+    usage_bin = cut(
+      usage,
+      breaks = seq(0, 1, by = 0.1),
+      include.lowest = TRUE
+    )
+  ) %>%
+  # count cells in each usage range for each program
+  count(program, usage_bin)
+
+# ---- line graph ----
+ggplot(df_line,
+       aes(x = usage_bin,
+           y = n,
+           group = program,
+           color = program)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Program Usage Range Distributions Across All Cells",
+    x = "Usage Range",
+    y = "Number of Cells"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# ---- facet line graphs ----
+ggplot(df_line,
+       aes(x = usage_bin,
+           y = n,
+           group = 1)) +
+  geom_line(color = "steelblue", linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ program, scales = "free_y") +
+  labs(
+    title = "Usage Range Distribution per Program Across All Cells",
+    x = "Usage Range",
+    y = "Number of Cells"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold")
+  )
+
+# ---- non facet line graph ----
+df_bin <- df.2 %>%
+  mutate(
+    usage_bin = cut(
+      usage,
+      breaks = seq(0, 1, by = 0.1),
+      include.lowest = TRUE
+    )
+  ) %>%
+  count(program, usage_bin)
+programs <- unique(df_bin$program)
+for (p in programs) {
+  df_p <- df_bin %>% filter(program == p)
+  print(
+    ggplot(df_p, aes(x = usage_bin, y = n, group = 1)) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 2) +
+      labs(
+        title = paste("Usage Distribution Across All Cells -", p),
+        x = "Usage Range",
+        y = "Number of Cells"
+      ) +
+      theme_bw() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+}
+
+# ---- line graph of dominant program ----
+programs <- unique(df_dom$dominant_program)
+for (p in programs) {
+
+  df_p <- df_dom %>%
+    filter(dominant_program == p)
+
+  p2 <- ggplot(df_p, aes(x = usage)) +
+    geom_density(fill = "lightblue", alpha = 0.5) +
+    labs(
+      title = paste("Density Distribution:", p),
+      x = "Usage",
+      y = "Density"
+    ) +
+    theme_bw()
+
+  print(p2)
+}
+```
+
+# Box plot comparing programs per cell by status (ADAD, sporadic, controls), correcting for age and other covariates. 
+```{r}
+ggplot(df.2, aes(x = Status.3, y = programs_per_cell)) +
+  geom_boxplot(outlier.shape = NA) +   # cleaner look (hides extreme outliers)
+  geom_jitter(width = 0.2, alpha = 0.2, size = 0.8) +  # shows individual cells
+  theme_classic() +
+  labs(
+    x = "Status",
+    y = "# Programs per Cell"
+  )
+
+ggplot(df.2, aes(x = Status.3, y = programs_per_cell, fill = Status.3)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.15, size = 0.7) +
+  theme_classic() +
+  theme(legend.position = "none") +
+  labs(
+    x = "Disease Status",
+    y = "# Programs per Cell"
+  )
+
+# box plot comparing programs per cell by status - before covariate correction 
+ggplot(df.2, aes(x = Status.3, y = programs_per_cell, fill = Status.3)) +
+  geom_boxplot() +
+  theme_classic()
+
+# box plot comparing programs per cell by status - CORRECTING FOR COVARIATES
+adj_model <- lm(programs_per_cell ~ status + age + sex + batch, data = df.2)
+df.2$adj_programs <- resid(adj_model) + mean(df.2$programs_per_cell)
+# plot adjusted values
+ggplot(df.2, aes(x = Status.3, y = adj_programs, fill = Status.3)) +
+  geom_boxplot() +
+  theme_classic()
+
+# discrete bar plot - number of programs expressed - combined data - adjusted for covariates - no change 
+ggplot(df, aes(x = programs_per_cell)) +
+  geom_histogram(binwidth = 1, fill = "grey", color = "black") +
+  labs(title = "Distribution of Programs per Cell",
+       x = "Number of Programs Expressed",
+       y = "Cell Count") +
+  theme_minimal()
+
+table(df.2$adj_programs) # no change 
+```
+
+idk yet 
+```{r}
+library(ggpubr)
+ggplot(df.2, aes(x = status, y = usage, fill = status)) +
+  geom_boxplot(outlier.shape = NA) +
+  facet_wrap(~ program, scales = "free_y") +
+  stat_compare_means(method = "wilcox.test") +  # ⚠️ unadjusted
+  theme_minimal()
+
+model_cov <- lm(
+  usage ~ status + APOE4_status + age + sex + batch,
+  data = df.2,
+  na.action = na.exclude
+)
+df.2$resid_usage <- residuals(model_cov)
+ggplot(df.2, aes(x = status, y = resid_usage, fill = status)) +
+  geom_boxplot() +
+  facet_wrap(~ program, scales = "free_y") +
+  stat_compare_means(method = "wilcox.test") +
+  theme_minimal()
+```
+
+# Visualizations of programs per cell - which combinations of programs co-occur
+```{r}
+# step 1: define “program expressed”
+threshold <- 0.1
+binary_usage <- usage > threshold
+
+# step 2: count programs per cell
+program_counts <- rowSums(binary_usage)
+
+# step 3: subset cells with exactly 3 programs
+cells_5prog <- binary_usage[program_counts == 3, ]
+
+# step 4: extract actual program combinations
+combo_list <- apply(cells_5prog, 1, function(x) {
+  paste(names(x)[x == 1], collapse = "_")
+})
+table(combo_list)
+
+# step 5: heatmap with clustering - Simple heatmap
+mat <- binary_usage[program_counts == 3, ]
+# Convert TRUE/FALSE → 1/0
+mat_numeric <- mat * 1
+
+pheatmap(
+  mat_numeric,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = FALSE
+)
+
+# use continuous values
+pheatmap(
+  usage[program_counts == 3, ],
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = FALSE,
+  scale = "row"
+)
+
+# step 7: cluster first, then summarize - Hierarchical clustering
+hc <- hclust(dist(usage[program_counts == 3, ]))
+clusters <- cutree(hc, k = 4)  # k = the number of clusters you choose to divide your cells into
+table(clusters) # cluster sizes 
+# average program usage per cluster
+aggregate(usage[program_counts == 3, ], by = list(clusters), mean)
+
+# heatmap of cluster averages
+## one step further and getting a visual of the aggregated data (showing the 4 clear program usage patterns)
+cluster_avg <- aggregate(
+  usage[program_counts == 3, ],
+  by = list(clusters),
+  mean
+)
+
+rownames(cluster_avg) <- paste0("Cluster_", cluster_avg$Group.1)
+cluster_avg$Group.1 <- NULL
+pheatmap(
+  as.matrix(cluster_avg),
+  cluster_rows = FALSE,
+  cluster_cols = TRUE,
+  scale = "row"
+)
+
+# barplot per cluster
+barplot(
+  t(as.matrix(cluster_avg)),
+  beside = TRUE,
+  legend = TRUE,
+  col = rainbow(7)
+)
+
+# dot plot
+# add cluster as a column
+cluster_avg$Cluster <- rownames(cluster_avg)
+# melt properly
+df <- melt(cluster_avg, id.vars = "Cluster")
+# rename columns
+colnames(df) <- c("Cluster", "Program", "Value")
+ggplot(df, aes(x = Program, y = Cluster, size = Value, color = Value)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  theme_minimal()
+```
+
+# Associate programs with AD vs. control 
+```{r}
+# step 1: merge usage with metadata
+usage_df <- as.data.frame(usage)
+usage_df$cell_id <- rownames(usage_df)
+meta <- combined_merged@meta.data
+meta$cell_id <- rownames(meta)
+df <- merge(usage_df, meta, by = "cell_id")
+
+# step 2: compare program usage by condition
+program_means <- df %>%
+  group_by(Status.3) %>%
+  summarise(across(starts_with("GEP"), mean))
+# idk this step yet #
+df_long <- tidyr::pivot_longer(df,
+                               cols = where(is.numeric),
+                               names_to = "program",
+                               values_to = "usage")
+
+# bar plot of counts by condition
+df$programs_per_cell <- programs_per_cell[match(df$cell_id, names(programs_per_cell))]
+df$Status.3  # "AD" or "Control" # check
+# create a histogram / bar plot of program counts per cell
+ggplot(df, aes(x = factor(programs_per_cell), fill = Status.3)) +
+  geom_bar(position = "dodge") +  # side-by-side bars
+  labs(title = "Distribution of Programs per Cell by Condition",
+       x = "Number of Programs Expressed per Cell",
+       y = "Cell Count") +
+  theme_minimal()
+
+# proportion plot
+ggplot(df, aes(x = factor(programs_per_cell, levels = 1:7), fill = Status.3)) +
+  geom_bar(position = "fill") +  # normalize to percent
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Proportion of Cells Expressing Programs by Condition",
+       x = "Number of Programs Expressed per Cell",
+       y = "Percent of Cells") +
+  theme_minimal()
+
+# statistical test
+tab <- table(df$programs_per_cell, df$Status)
+chisq.test(tab)
+
+# ~~~ status_final ~~~ #
+# step 1: merge usage with metadata
+usage_df <- as.data.frame(usage)
+usage_df$cell_id <- rownames(usage_df)
+meta <- combined_merged@meta.data
+meta$cell_id <- rownames(meta)
+df <- merge(usage_df, meta, by = "cell_id")
+
+# step 2: compare program usage by condition
+program_means <- df %>%
+  group_by(Status_final) %>%
+  summarise(across(starts_with("GEP"), mean))
+# idk this step yet #
+df_long <- tidyr::pivot_longer(df,
+                               cols = where(is.numeric),
+                               names_to = "program",
+                               values_to = "usage")
+
+# bar plot of counts by condition
+df$programs_per_cell <- programs_per_cell[match(df$cell_id, names(programs_per_cell))]
+df$Status_final  # "AD" or "Control" # check
+# create a histogram / bar plot of program counts per cell
+ggplot(df, aes(x = factor(programs_per_cell), fill = Status_final)) +
+  geom_bar(position = "dodge") +  # side-by-side bars
+  labs(title = "Distribution of Programs per Cell by Condition",
+       x = "Number of Programs Expressed per Cell",
+       y = "Cell Count") +
+  theme_minimal()
+
+Status_final <- combined_merged$Status_final
+
+# proportion plot
+# create labels with counts
+count_labels <- c(
+  "1\n(n=225)",
+  "2\n(n=2617)",
+  "3\n(n=8539)",
+  "4\n(n=9074)",
+  "5\n(n=3556)",
+  "6\n(n=369)",
+  "7\n(n=8)"
+)
+
+ggplot(df, aes(x = factor(programs_per_cell), fill = Status_final)) +
+  geom_bar(position = "dodge") +
+  scale_x_discrete(labels = count_labels) +
+  labs(
+    title = "Distribution of Programs per Cell by Condition",
+    x = "Number of Programs Expressed per Cell",
+    y = "Cell Count"
+  ) +
+  theme_minimal()
+
+colSums(table(df$Status_final, df$programs_per_cell)) # total cells per programs
+table(df$Status_final, df$programs_per_cell) # exact cell counts per group × program number
+
+# statistical test
+tab <- table(df$programs_per_cell, df$Status_final)
+chisq.test(tab)
+```
+
+# Investigating cluster 13 
+```{r}
+table(combined_merged$seurat_clusters)
+table(combined_merged$seurat_clusters == 13)
+
+df <- combined_merged@meta.data %>%
+     filter(!is.na(Status_mixed)) %>%
+     group_by(orig.ident, Status_mixed) %>%
+     summarise(prop_13 = mean(cluster13), .groups = "drop")
+
+ggplot(df, aes(x = Status_mixed, y = prop_13, fill = Status_mixed)) +
+     geom_boxplot() +
+     geom_jitter(width = 0.1) +
+     theme_classic()
+
+table(combined_merged$Status_combined[combined_merged$seurat_clusters == 13])
+table(combined_merged$Status_mixed[combined_merged$seurat_clusters == 13]) # proportions of sub statuses for cluster 13
+prop.table(
+  table(combined_merged$Status_mixed[combined_merged$seurat_clusters == 13])
+) * 100 # percentage 
+wilcox_test(prop_13 ~ Status_mixed, data = df)
+as.data.frame(
+  table(combined_merged$Status_mixed[combined_merged$seurat_clusters == 13])
+) # dataframe of proportions of sub statuses for cluster 13
+DimPlot(combined_merged, reduction = "umap", cells.highlight = WhichCells(combined_merged, idents = 13)) # showing where cluster 13 is
+
+# project cluster 13 labels onto the Harmony UMAP coordinates
+DimPlot(
+  combined_merged,
+  reduction = "umap_cnmf",   # your Harmony UMAP
+  cells.highlight = WhichCells(combined_merged, idents = 13)
+)
+```
+
+# All cluster labels projected onto the Harmony umap
+```{r}
+# currently overlaying old clusters onto a new map
+combined_merged$seurat_clusters # check suerat cluster labels 
+
+DimPlot(
+  combined_merged,
+  reduction = "umap_cnmf",
+  group.by = "seurat_clusters",
+  label = TRUE
+)
+
+DimPlot(
+  combined_merged,
+  reduction = "umap_cnmf",
+  label = TRUE
+)
+```
+
+# Fully consistent clustering - “Consistent” = recalculate clusters using the same Harmony data that made the UMAP
+```{r}
+harmony_pca <- read.csv("figures/microglia_harmony_pca_1211.csv", row.names = 1)
+
+# make sure order matches
+harmony_pca <- harmony_pca[colnames(combined_merged), ]
+
+# make sure it's a matrix
+harmony_pca <- as.matrix(harmony_pca)
+
+# fix column names (required)
+colnames(harmony_pca) <- paste0("HARMONY_", seq_len(ncol(harmony_pca)))
+
+# ensure rownames match cells
+harmony_pca <- harmony_pca[colnames(combined_merged), ]
+
+# create reduction
+combined_merged[["harmony"]] <- CreateDimReducObject(
+  embeddings = harmony_pca,
+  key = "HARMONY_",
+  assay = DefaultAssay(combined_merged)
+)
+
+head(colnames(harmony_pca))
+
+combined_merged.pca <- FindNeighbors(combined_merged, reduction = "harmony", dims = 1:30)
+combined_merged.pca <- FindClusters(combined_merged, resolution = 0.2)
+
+FindNeighbors(combined_merged.pca, reduction = "harmony", dims = 1:30)
+FindClusters(combined_merged.pca, resolution = 0.2)
+RunUMAP(combined_merged.pca, reduction = "harmony", dims = 1:30)
+
+DimPlot(
+  combined_merged.pca,
+  reduction = "umap",
+  group.by = "seurat_clusters",
+  label = TRUE
+)
+```
+
+# Investigating programs 3 & 8
+```{r}
+table(combined_merged$Status_final)
+table(combined_merged$top_program)
+table(
+  combined_merged$top_program,
+  combined_merged$Status_final
+)[c("Program_3", "Program_8"), ]
+
+# check cell counts for programs 3 and 8 across disease groups
+combined_merged@meta.data %>%
+  filter(top_program %in% c("Program_3", "Program_8")) %>%
+  group_by(top_program, Status_final) %>%
+  summarise(cell_count = n(), .groups = "drop")
+
+table(
+  combined_merged$top_program,
+  combined_merged$batch
+)[c("Program_3", "Program_8"), ] # programs 3 and 8 are present in both datasets
+```
+
+# Status.3 Analysis - by batch and status 
+```{r}
+table(combined_merged$Status.3)
+table(combined_merged$Status.3, combined_merged$dominant_program)
+table(combined_merged$Status.3, combined_merged$cell_state)
+# create counts table
+tab <- table(combined_merged$Status.3, combined_merged$dominant_program)
+tab
+# convert to row percentages
+prop_tab <- prop.table(tab, margin = 2) * 100
+round(prop_tab, 1)
+# Add row totals (right side)
+row_totals <- rowSums(tab)
+# Add column totals (bottom row)
+col_totals <- colSums(tab)
+# Combine everything into one display table
+tab_with_row_totals <- cbind(tab, Total = rowSums(tab))
+tab_with_col_totals <- rbind(tab_with_row_totals, Total = c(colSums(tab), sum(tab)))
+tab_with_col_totals
+
+# percentages + counts together (ex: 707 (12.3%))
+prop_tab <- prop.table(tab, margin = 2) * 100
+combined <- paste0(tab, " (", round(prop_tab, 1), "%)")
+combined
+
+prop.table(tab, 2) # raw decimals, same as percentages 
+```
+
